@@ -1,4 +1,4 @@
-module github.com/Jeffail/benthos
+module github.com/iluminae/benthos
 
 require (
 	github.com/Azure/go-ansiterm v0.0.0-20170929234023-d6e3b3328b78 // indirect
@@ -28,6 +28,7 @@ require (
 	github.com/edsrzf/mmap-go v0.0.0-20170320065105-0bce6a688712
 	github.com/fortytw2/leaktest v1.2.0 // indirect
 	github.com/go-redis/redis v6.14.0+incompatible
+	github.com/gocql/gocql v0.0.0-20180910092241-e898b2baaf08 // indirect
 	github.com/gofrs/uuid v3.1.0+incompatible
 	github.com/gogo/protobuf v1.1.1 // indirect
 	github.com/golang/protobuf v1.2.0 // indirect
@@ -50,6 +51,7 @@ require (
 	github.com/nats-io/nats-streaming-server v0.10.2 // indirect
 	github.com/nats-io/nuid v1.0.0 // indirect
 	github.com/nsqio/go-nsq v1.0.7
+	github.com/oliveagle/jsonpath v0.0.0-20180606110733-2e52cf6e6852 // indirect
 	github.com/olivere/elastic v6.1.25+incompatible
 	github.com/onsi/ginkgo v1.6.0 // indirect
 	github.com/onsi/gomega v1.4.1 // indirect
