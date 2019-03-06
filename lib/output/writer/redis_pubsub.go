@@ -21,6 +21,7 @@
 package writer
 
 import (
+	"fmt"
 	"net/url"
 	"sync"
 	"time"
@@ -38,15 +39,15 @@ import (
 // RedisPubSubConfig contains configuration fields for the RedisPubSub output
 // type.
 type RedisPubSubConfig struct {
-	URL     string `json:"url" yaml:"url"`
-	Channel string `json:"channel" yaml:"channel"`
+	Addresses []string `json:"addresses" yaml:"addresses"`
+	Channel   string   `json:"channel" yaml:"channel"`
 }
 
 // NewRedisPubSubConfig creates a new RedisPubSubConfig with default values.
 func NewRedisPubSubConfig() RedisPubSubConfig {
 	return RedisPubSubConfig{
-		URL:     "tcp://localhost:6379",
-		Channel: "benthos_chan",
+		Addresses: []string{"localhost:6379"},
+		Channel:   "benthos_chan",
 	}
 }
 
@@ -61,7 +62,7 @@ type RedisPubSub struct {
 	conf       RedisPubSubConfig
 	channelStr *text.InterpolatedString
 
-	client  *redis.Client
+	client  *redis.Ring
 	connMut sync.RWMutex
 }
 
@@ -78,12 +79,6 @@ func NewRedisPubSub(
 		channelStr: text.NewInterpolatedString(conf.Channel),
 	}
 
-	var err error
-	r.url, err = url.Parse(conf.URL)
-	if err != nil {
-		return nil, err
-	}
-
 	return r, nil
 }
 
@@ -94,14 +89,12 @@ func (r *RedisPubSub) Connect() error {
 	r.connMut.Lock()
 	defer r.connMut.Unlock()
 
-	var pass string
-	if r.url.User != nil {
-		pass, _ = r.url.User.Password()
+	addrs := make(map[string]string)
+	for i := range r.conf.Addresses {
+		addrs[fmt.Sprintf("shard%d", i)] = r.conf.Addresses[i]
 	}
-	client := redis.NewClient(&redis.Options{
-		Addr:     r.url.Host,
-		Network:  r.url.Scheme,
-		Password: pass,
+	client := redis.NewRing(&redis.RingOptions{
+		Addrs: addrs,
 	})
 
 	if _, err := client.Ping().Result(); err != nil {
