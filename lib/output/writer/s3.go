@@ -14,6 +14,7 @@ import (
 	"github.com/Jeffail/benthos/v3/lib/util/text"
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
+	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/aws/aws-sdk-go/service/s3/s3manager"
 )
 
@@ -31,6 +32,7 @@ type AmazonS3Config struct {
 	Timeout            string `json:"timeout" yaml:"timeout"`
 	KMSKeyID           string `json:"kms_key_id" yaml:"kms_key_id"`
 	MaxInFlight        int    `json:"max_in_flight" yaml:"max_in_flight"`
+	TryAppend          bool   `json:"append" yaml:"append"`
 }
 
 // NewAmazonS3Config creates a new Config with default values.
@@ -46,6 +48,7 @@ func NewAmazonS3Config() AmazonS3Config {
 		Timeout:            "5s",
 		KMSKeyID:           "",
 		MaxInFlight:        1,
+		TryAppend:          false,
 	}
 }
 
@@ -125,6 +128,8 @@ func (a *AmazonS3) Write(msg types.Message) error {
 	return a.WriteWithContext(context.Background(), msg)
 }
 
+const ext = "/part"
+
 // WriteWithContext attempts to write message contents to a target S3 bucket as
 // files.
 func (a *AmazonS3) WriteWithContext(wctx context.Context, msg types.Message) error {
@@ -145,19 +150,39 @@ func (a *AmazonS3) WriteWithContext(wctx context.Context, msg types.Message) err
 		})
 
 		lMsg := message.Lock(msg, i)
+		path := a.path.Get(lMsg)
 
 		var contentEncoding *string
 		if ce := a.contentEncoding.Get(lMsg); len(ce) > 0 {
 			contentEncoding = aws.String(ce)
 		}
+		var contentType *string
+		if ct := a.contentType.Get(lMsg); len(ct) > 0 {
+			contentType = aws.String(ct)
+		}
+		var storageClass *string
+		if sc := a.storageClass.Get(lMsg); len(sc) > 0 {
+			storageClass = aws.String(sc)
+		}
 
+		path2 := path
+		var found bool
+		if a.conf.TryAppend {
+			if _, err := a.uploader.S3.HeadObjectWithContext(ctx, &s3.HeadObjectInput{
+				Bucket: &a.conf.Bucket,
+				Key:    aws.String(path),
+			}); err == nil {
+				found = true
+				path2 += ext
+			}
+		}
 		uploadInput := &s3manager.UploadInput{
 			Bucket:          &a.conf.Bucket,
-			Key:             aws.String(a.path.Get(lMsg)),
+			Key:             aws.String(path2),
 			Body:            bytes.NewReader(p.Get()),
-			ContentType:     aws.String(a.contentType.Get(lMsg)),
+			ContentType:     contentType,
 			ContentEncoding: contentEncoding,
-			StorageClass:    aws.String(a.storageClass.Get(lMsg)),
+			StorageClass:    storageClass,
 			Metadata:        metadata,
 		}
 
@@ -168,6 +193,49 @@ func (a *AmazonS3) WriteWithContext(wctx context.Context, msg types.Message) err
 
 		if _, err := a.uploader.UploadWithContext(ctx, uploadInput); err != nil {
 			return err
+		}
+
+		if a.conf.TryAppend && found {
+			client := a.uploader.S3
+			var uploadId *string
+			if muo, err := client.CreateMultipartUploadWithContext(ctx, &s3.CreateMultipartUploadInput{
+				Bucket:          aws.String(a.conf.Bucket),
+				Key:             aws.String(path),
+				ContentType:     contentType,
+				ContentEncoding: contentEncoding,
+				StorageClass:    storageClass,
+				Metadata:        metadata,
+			}); err != nil {
+				return err
+			} else {
+				uploadId = muo.UploadId
+			}
+
+			parts := make([]*s3.CompletedPart, 2)
+			for i, p := range []string{path, path + ext} {
+				pret, err := client.UploadPartCopyWithContext(ctx, &s3.UploadPartCopyInput{
+					CopySource: aws.String(a.conf.Bucket + "/" + path),
+					Bucket:     aws.String(a.conf.Bucket),
+					Key:        aws.String(p),
+					PartNumber: aws.Int64(int64(i)),
+					UploadId:   uploadId,
+				})
+				if err != nil {
+					return err
+				}
+				parts[i] = &s3.CompletedPart{
+					ETag:       pret.CopyPartResult.ETag,
+					PartNumber: aws.Int64(int64(i)),
+				}
+			}
+			if _, err := client.CompleteMultipartUploadWithContext(ctx, &s3.CompleteMultipartUploadInput{
+				Bucket:          aws.String(a.conf.Bucket),
+				Key:             aws.String(path),
+				UploadId:        uploadId,
+				MultipartUpload: &s3.CompletedMultipartUpload{Parts: parts},
+			}); err != nil {
+				return err
+			}
 		}
 		return nil
 	})
